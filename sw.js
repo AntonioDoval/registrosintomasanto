@@ -1,4 +1,5 @@
-const CACHE = "registro-v1";
+// Subir este número en cada actualización: obliga al celular a bajar los archivos nuevos.
+const CACHE = "registro-v2";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", e => {

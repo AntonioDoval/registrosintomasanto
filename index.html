@@ -83,7 +83,9 @@
   .rec{display:flex;gap:10px;padding:10px 2px;border-bottom:1px solid var(--line);align-items:flex-start}
   .rec:last-child{border-bottom:0}
   .rec .t{font-size:12px;color:var(--muted);width:60px;flex:none;padding-top:2px;font-variant-numeric:tabular-nums}
-  .rec .b{flex:1;min-width:0}
+  .rec .t .f{display:block;font-weight:650;opacity:.8}
+  .rec .b{flex:1;min-width:0;text-align:left;padding:0;background:none;border:0;font:inherit;color:inherit}
+  .rec .b:active{opacity:.55}
   .rec .b b{font-size:15px;font-weight:600}
   .rec .b .val{color:var(--accent);font-weight:700}
   .rec .b p{margin:2px 0 0;font-size:13px;color:var(--muted);overflow-wrap:anywhere}
@@ -114,9 +116,19 @@
   label{display:block;font-size:13px;font-weight:650;color:var(--muted);margin:16px 0 7px}
   label:first-child{margin-top:2px}
   input[type=text],input[type=datetime-local],textarea{
-    width:100%;background:var(--card);border:1px solid var(--line);
+    width:100%;max-width:100%;min-width:0;display:block;
+    background:var(--card);border:1px solid var(--line);
     border-radius:11px;padding:13px 12px;outline:none
   }
+  /* iOS le da a datetime-local un ancho intrínseco que ignora al contenedor */
+  input[type=datetime-local]{
+    -webkit-appearance:none;appearance:none;
+    text-align:left;height:50px;line-height:22px
+  }
+  input[type=datetime-local]::-webkit-date-and-time-value{
+    text-align:left;margin:0;min-width:0
+  }
+  input[type=datetime-local]::-webkit-calendar-picker-indicator{margin-left:auto}
   input:focus,textarea:focus{border-color:var(--accent)}
   textarea{resize:vertical;min-height:84px}
 
@@ -170,8 +182,10 @@
   <h2>Registrar</h2>
   <div class="grid" id="tiles"></div>
 
-  <h2>Hoy</h2>
+  <h2 id="tituloLista">Hoy</h2>
   <div id="recientes"></div>
+  <button class="linkbtn" id="verMas" hidden></button>
+  <p class="note" id="pista">Tocá cualquier registro para corregirlo.</p>
 </main>
 
 <div id="sheet" role="dialog" aria-modal="true">
@@ -222,6 +236,7 @@ const LS = {
   set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
 };
 
+let verTodo  = false;
 let cfg      = LS.get("cfg",{url:"",token:""});
 let queue    = LS.get("queue",[]);      // operaciones pendientes de enviar
 let entries  = LS.get("entries",[]);    // copia local de lo registrado
@@ -324,15 +339,41 @@ function guardar(row){
   toast(queue.length ? "Guardado — se envía al reconectar" : "Guardado");
 }
 
+// Si el alta todavía no salió, se corrige ahí mismo en vez de encolar otra operación.
+function pendienteDe(id){
+  return queue.find(o=>o.op==="add" && o.id===id);
+}
+
 function cerrarActivo(id){
   const fin = nowLocal();
   const a = activos.find(x=>x.id===id);
   activos = activos.filter(x=>x.id!==id);
   const e = entries.find(x=>x.id===id);
   if (e){ e.fin = fin; e.sync = false; }
-  encolar({op:"update", id:id, fin:fin});
+
+  const p = pendienteDe(id);
+  if (p){ p.row.fin = fin; saveAll(); sync(true); }
+  else encolar({op:"update", id:id, fin:fin});
+
   saveAll(); render();
   toast((a?a.categoria:"Síntoma") + " cerrado");
+}
+
+function editarGuardar(id, row){
+  const e = entries.find(x=>x.id===id);
+  if (e){
+    e.categoria = row.categoria; e.inicio = row.inicio; e.fin = row.fin;
+    e.valor = row.valor; e.comentarios = row.comentarios; e.sync = false;
+  }
+  activos = activos.filter(x=>x.id!==id);
+  if (row.abierto) activos.push({id:id, categoria:row.categoria, inicio:row.inicio});
+
+  const p = pendienteDe(id);
+  if (p){ Object.assign(p.row, row); saveAll(); sync(true); }
+  else encolar({op:"edit", id:id, row:row});
+
+  saveAll(); render();
+  toast("Cambios guardados");
 }
 
 function borrar(id){
@@ -371,22 +412,35 @@ function render(){
     ac.append(d);
   });
 
-  // hoy
+  // lista: hoy por defecto (por momento de registro, así el sueño de anoche cae hoy)
   const r = $("recientes");
   r.textContent = "";
-  // se lista por momento de registro: el sueño de anoche aparece hoy
-  const hoy = entries.filter(e=>esHoy(e.registrado || e.reg || e.inicio));
-  if (!hoy.length){
+  const esDeHoy = e => esHoy(e.registrado || e.reg || e.inicio);
+  const lista = verTodo ? entries : entries.filter(esDeHoy);
+  const anteriores = entries.length - entries.filter(esDeHoy).length;
+
+  $("tituloLista").textContent = verTodo ? "Todos los registros" : "Hoy";
+
+  if (!lista.length){
     const p = document.createElement("div");
     p.className = "empty";
     p.textContent = "Todavía no registraste nada hoy.";
     r.append(p);
   }
-  hoy.forEach(e=>{
+
+  lista.forEach(e=>{
     const d = document.createElement("div"); d.className = "rec";
+
     const t = document.createElement("div"); t.className = "t";
-    t.textContent = hhmm(e.inicio) + (e.fin ? "–" + hhmm(e.fin) : "");
-    const bd = document.createElement("div"); bd.className = "b";
+    if (!esDeHoy(e)){
+      const f = document.createElement("span"); f.className="f";
+      f.textContent = e.inicio.slice(8,10) + "/" + e.inicio.slice(5,7);
+      t.append(f);
+    }
+    t.append(document.createTextNode(hhmm(e.inicio) + (e.fin ? "–" + hhmm(e.fin) : "")));
+
+    const bd = document.createElement("button"); bd.className = "b";
+    bd.setAttribute("aria-label", "Editar " + e.categoria);
     const bb = document.createElement("b"); bb.textContent = e.categoria;
     bd.append(bb);
     if (e.valor !== "" && e.valor != null){
@@ -399,15 +453,28 @@ function render(){
     if (e.comentarios){
       const p = document.createElement("p"); p.textContent = e.comentarios; bd.append(p);
     }
+    bd.onclick = ()=>editar(e);
+
     const s = document.createElement("div"); s.className = "s";
     s.textContent = e.sync ? "✓" : "⏳";
     s.title = e.sync ? "Enviado" : "Pendiente";
     const x = document.createElement("button"); x.className = "x"; x.textContent = "×";
     x.setAttribute("aria-label","Borrar");
     x.onclick = ()=>borrar(e.id);
+
     d.append(t,bd,s,x);
     r.append(d);
   });
+
+  const link = $("verMas");
+  if (verTodo){
+    link.hidden = false; link.textContent = "Ver sólo hoy";
+  } else if (anteriores){
+    link.hidden = false;
+    link.textContent = "Ver registros anteriores (" + anteriores + ")";
+  } else {
+    link.hidden = true;
+  }
 }
 
 function tiles(){
@@ -454,6 +521,7 @@ function bloqueEscala(state, cfgc){
     const n = document.createElement("span"); n.className = "n"; n.textContent = i;
     const t = document.createElement("span"); t.className = "t"; t.textContent = txt;
     b.append(n,t);
+    if (Number(state.valor) === i) b.setAttribute("aria-pressed","true");
     b.onclick = ()=>{
       state.valor = i;
       sc.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed","false"));
@@ -466,12 +534,12 @@ function bloqueEscala(state, cfgc){
   return wrap;
 }
 
-function bloqueFecha(labelTxt, key, state, valorInicial){
+function bloqueFecha(labelTxt, key, state){
   const wrap = document.createElement("div");
   const l = document.createElement("label"); l.textContent = labelTxt;
   const i = document.createElement("input");
   i.type = "datetime-local";
-  i.value = valorInicial === undefined ? nowLocal() : valorInicial;
+  i.value = state[key] || nowLocal();
   state[key] = i.value;
   i.oninput = ()=>{ state[key] = i.value; validar(); };
   wrap.append(l,i);
@@ -487,12 +555,15 @@ function bloqueFinOpcional(state){
   const l = document.createElement("label"); l.textContent = "Fin";
   const i = document.createElement("input"); i.type = "datetime-local";
   i.oninput = ()=>{ state.fin = i.value; };
-  box.append(l,i);
+  const quitar = document.createElement("button");
+  quitar.type="button"; quitar.className="linkbtn"; quitar.textContent = "− quitar hora de fin";
+  quitar.onclick = ()=>{ state.fin=""; i.value=""; box.hidden=true; link.hidden=false; };
+  box.append(l,i,quitar);
   link.onclick = ()=>{
     box.hidden = false; link.hidden = true;
     i.value = nowLocal(); state.fin = i.value;
-    i.focus();
   };
+  if (state.fin){ i.value = state.fin; box.hidden = false; link.hidden = true; }
   wrap.append(link,box);
   return wrap;
 }
@@ -501,6 +572,7 @@ function bloqueTexto(labelTxt, state, req){
   const wrap = document.createElement("div");
   const l = document.createElement("label"); l.textContent = labelTxt + (req ? "" : " (opcional)");
   const t = document.createElement("textarea");
+  t.value = state.comentarios || "";
   t.oninput = ()=>{ state.comentarios = t.value; validar(); };
   wrap.append(l,t);
   return wrap;
@@ -517,6 +589,16 @@ function abrir(key){
   const c = CATS[key];
   if (key === "sintoma") return elegirSintoma();
   construir(c, c.cat);
+}
+
+// de la categoría guardada al formulario que la creó
+function catDe(categoria){
+  for (const k in CATS){ if (CATS[k].cat === categoria) return CATS[k]; }
+  return CATS.sintoma;   // cualquier otro nombre es un síntoma
+}
+
+function editar(e){
+  construir(catDe(e.categoria), e.categoria, e);
 }
 
 function elegirSintoma(){
@@ -544,13 +626,18 @@ function elegirSintoma(){
   body.append(l,opts);
 }
 
-function construir(c, categoria){
-  abrirHoja(categoria || c.label);
+function construir(c, categoria, ex){
+  abrirHoja((ex ? "Editar · " : "") + (categoria || c.label));
   $("sheetFoot").hidden = false;
+  $("btnSave").textContent = ex ? "Guardar cambios" : "Guardar";
   const body = $("sheetBody");
   body.textContent = "";
 
-  const st = { categoria: categoria, valor:"", inicio:nowLocal(), fin:"", comentarios:"", abierto:false };
+  const st = ex
+    ? { categoria: ex.categoria, valor: ex.valor === "" || ex.valor == null ? "" : Number(ex.valor),
+        inicio: ex.inicio, fin: ex.fin || "", comentarios: ex.comentarios || "",
+        abierto: false, editId: ex.id }   // sólo el form de síntoma lo pone en true
+    : { categoria: categoria, valor:"", inicio:nowLocal(), fin:"", comentarios:"", abierto:false, editId:null };
 
   if (c.form === "rango"){
     body.append(bloqueTexto(c.txt, st, true));
@@ -575,20 +662,16 @@ function construir(c, categoria){
   else if (c.form === "sueno"){
     body.append(bloqueEscala(st, c));
 
-    const fila = document.createElement("div"); fila.className = "row2";
-    const st2 = {};
-    const d1 = document.createElement("div");
+    const st2 = { ac: ex ? st.inicio : "", le: ex ? st.fin : "" };
     const l1 = document.createElement("label"); l1.textContent = "Me acosté";
     const i1 = document.createElement("input"); i1.type = "datetime-local";
+    i1.value = st2.ac;
     i1.oninput = ()=>{ st2.ac = i1.value; validar(); };
-    d1.append(l1,i1);
-    const d2 = document.createElement("div");
     const l2 = document.createElement("label"); l2.textContent = "Me levanté";
     const i2 = document.createElement("input"); i2.type = "datetime-local";
+    i2.value = st2.le;
     i2.oninput = ()=>{ st2.le = i2.value; validar(); };
-    d2.append(l2,i2);
-    fila.append(d1,d2);
-    body.append(fila);
+    body.append(l1,i1,l2,i2);
 
     const ay = document.createElement("button");
     ay.type="button"; ay.className="linkbtn";
@@ -609,7 +692,7 @@ function construir(c, categoria){
     body.append(bloqueTexto(c.txt, st, false));
     form = {
       st, valido:()=> st.valor !== "",
-      pre:()=>{ st.inicio = st2.ac || nowLocal(); st.fin = st2.le || ""; }
+      pre:()=>{ st.inicio = st2.ac || (ex ? st.inicio : nowLocal()); st.fin = st2.le || ""; }
     };
   }
 
@@ -623,6 +706,7 @@ function construir(c, categoria){
       const num = document.createElement("span"); num.className="num"; num.textContent = n;
       const d = document.createElement("span"); d.className="d"; d.textContent = desc;
       b.append(num,d);
+      if (Number(st.valor) === Number(n)) b.setAttribute("aria-pressed","true");
       b.onclick = ()=>{
         st.valor = Number(n);
         opts.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed","false"));
@@ -643,32 +727,35 @@ function construir(c, categoria){
 
     const l = document.createElement("label"); l.textContent = "¿Ya terminó?";
     const opts = document.createElement("div"); opts.className = "opts";
+    const yaTermino = !!st.fin;
     const bSigue = document.createElement("button");
     bSigue.className="opt"; bSigue.type="button";
     bSigue.textContent = "Sigue — lo cierro después";
-    bSigue.setAttribute("aria-pressed","true");
+    bSigue.setAttribute("aria-pressed", String(!yaTermino));
     const bFin = document.createElement("button");
     bFin.className="opt"; bFin.type="button";
     bFin.textContent = "Ya terminó";
-    bFin.setAttribute("aria-pressed","false");
+    bFin.setAttribute("aria-pressed", String(yaTermino));
 
-    const finBox = document.createElement("div"); finBox.hidden = true;
+    const finBox = document.createElement("div"); finBox.hidden = !yaTermino;
     const lf = document.createElement("label"); lf.textContent = "Terminó";
     const inf = document.createElement("input"); inf.type = "datetime-local";
+    inf.value = st.fin || "";
     inf.oninput = ()=>{ st.fin = inf.value; };
     finBox.append(lf,inf);
 
     bSigue.onclick = ()=>{
-      st.abierto = true; st.fin = ""; finBox.hidden = true;
+      st.abierto = true; st.fin = ""; inf.value = ""; finBox.hidden = true;
       bSigue.setAttribute("aria-pressed","true"); bFin.setAttribute("aria-pressed","false");
     };
     bFin.onclick = ()=>{
       st.abierto = false;
-      inf.value = nowLocal(); st.fin = inf.value;
+      if (!inf.value){ inf.value = nowLocal(); }
+      st.fin = inf.value;
       finBox.hidden = false;
       bFin.setAttribute("aria-pressed","true"); bSigue.setAttribute("aria-pressed","false");
     };
-    st.abierto = true;
+    st.abierto = !yaTermino;
 
     opts.append(bSigue,bFin);
     body.append(l,opts,finBox);
@@ -734,18 +821,21 @@ function ajustes(){
 
 $("btnCfg").onclick = ajustes;
 $("btnBack").onclick = cerrarHoja;
+$("verMas").onclick = ()=>{ verTodo = !verTodo; render(); };
 $("btnSave").onclick = ()=>{
   if (!form || !form.valido()) return;
   if (form.pre) form.pre();
   const s = form.st;
-  guardar({
+  const row = {
     categoria: s.categoria,
     inicio: s.inicio,
     fin: s.fin || "",
     valor: s.valor === "" ? "" : s.valor,
     comentarios: (s.comentarios || "").trim(),
     abierto: !!s.abierto
-  });
+  };
+  if (s.editId) editarGuardar(s.editId, row);
+  else guardar(row);
   cerrarHoja();
 };
 
@@ -760,6 +850,13 @@ if (!cfg.url) setTimeout(()=>toast("Configurá el destino en ⚙"), 700);
 
 if ("serviceWorker" in navigator){
   window.addEventListener("load", ()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
+  // Cuando se publica una versión nueva, se aplica sola (salvo que haya un form abierto).
+  let recargando = false;
+  navigator.serviceWorker.addEventListener("controllerchange", ()=>{
+    if (recargando || $("sheet").classList.contains("open")) return;
+    recargando = true;
+    location.reload();
+  });
 }
 </script>
 </body>
