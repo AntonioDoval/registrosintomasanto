@@ -157,6 +157,18 @@
   .row2{display:flex;gap:9px}
   .row2 > div{flex:1;min-width:0}
   .note{font-size:13px;color:var(--muted);margin:10px 0 6px;line-height:1.5}
+  .diag{
+    background:var(--card);border:1px solid var(--line);border-left:3px solid var(--warn);
+    border-radius:11px;padding:12px;margin:14px 0 0;font-size:12px;line-height:1.5;
+    white-space:pre-wrap;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    -webkit-user-select:text;user-select:text
+  }
+  .sep{border-top:1px solid var(--line);margin:26px 0 4px}
+  .exportbox{
+    width:100%;height:150px;margin-top:10px;font-size:11px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    background:var(--card);border:1px solid var(--line);border-radius:11px;padding:10px
+  }
   .toast{
     position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 22px);
     background:var(--fg);color:var(--bg);padding:11px 18px;border-radius:999px;
@@ -781,6 +793,17 @@ function ajustes(){
   const i2 = document.createElement("input"); i2.type="text"; i2.value = cfg.token;
   i2.setAttribute("autocapitalize","off"); i2.setAttribute("autocorrect","off");
 
+  const diag = document.createElement("pre"); diag.className = "diag"; diag.hidden = true;
+  const copiarDiag = document.createElement("button");
+  copiarDiag.className = "linkbtn"; copiarDiag.hidden = true;
+  copiarDiag.textContent = "Copiar este diagnóstico";
+  copiarDiag.onclick = ()=>{ copiar(diag.textContent, "Diagnóstico copiado"); };
+
+  function mostrar(txt){
+    diag.textContent = txt;
+    diag.hidden = false; copiarDiag.hidden = false;
+  }
+
   const b = document.createElement("button");
   b.className = "save"; b.style.marginTop = "22px";
   b.textContent = "Guardar y probar";
@@ -788,6 +811,14 @@ function ajustes(){
     cfg = { url: i1.value.trim(), token: i2.value.trim() };
     LS.set("cfg", cfg);
     if (!cfg.url) return toast("Falta la URL");
+
+    // chequeos que no necesitan internet
+    if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(cfg.url)){
+      let m = "La URL no tiene la forma esperada.\n\nDebería ser:\nhttps://script.google.com/macros/s/....../exec\n\nLa que pusiste:\n" + cfg.url;
+      if (/\/dev$/.test(cfg.url)) m += "\n\n→ Termina en /dev. Esa es la URL de prueba y sólo funciona en el navegador donde estás logueado. Necesitás la que termina en /exec.";
+      return mostrar(m);
+    }
+
     b.disabled = true; b.textContent = "Probando…";
     try{
       const res = await fetch(cfg.url, {
@@ -795,26 +826,113 @@ function ajustes(){
         headers:{"Content-Type":"text/plain;charset=utf-8"},
         body: JSON.stringify({token:cfg.token, ops:[]})
       });
-      const d = await res.json();
-      toast(d.ok ? "Conexión correcta" : (d.error==="token" ? "Token incorrecto" : "Error del servidor"));
-      if (d.ok){ sync(true); cerrarHoja(); }
+      // texto primero: si no es JSON, igual queremos ver qué llegó
+      const txt = await res.text();
+      let d = null;
+      try{ d = JSON.parse(txt); }catch(e){}
+
+      if (d && d.ok){
+        diag.hidden = true; copiarDiag.hidden = true;
+        toast("Conexión correcta");
+        sync(true); cerrarHoja();
+      } else if (d && d.error === "token"){
+        mostrar("El script respondió, pero rechazó el token.\n\n→ Corré de nuevo la función configurar() en Apps Script y copiá el TOKEN que aparece en el registro de ejecución.");
+      } else if (d){
+        mostrar("El script respondió con un error:\n\n" + txt.slice(0,400));
+      } else {
+        mostrar(
+          "El script NO devolvió JSON.\n\n" +
+          "HTTP " + res.status + " " + res.statusText + "\n" +
+          "tipo: " + (res.headers.get("content-type") || "?") + "\n\n" +
+          "Primeros caracteres de la respuesta:\n" + txt.slice(0,400) +
+          "\n\n→ Suele ser una página de error de Google: falta autorizar el script, " +
+          "o la implementación quedó de una versión vieja. Mandale esto a Claude."
+        );
+      }
     }catch(e){
-      toast("No se pudo conectar");
+      mostrar(
+        "El pedido no llegó a salir.\n\n" + (e && e.name ? e.name + ": " : "") + (e && e.message ? e.message : e) +
+        "\n\n→ O no hay internet, o el navegador bloqueó el pedido (CORS). " +
+        "Si la URL abierta a mano sí responde, es lo segundo. Mandale esto a Claude."
+      );
     }finally{
       b.disabled = false; b.textContent = "Guardar y probar";
     }
   };
 
   const pend = document.createElement("p"); pend.className="note";
-  pend.textContent = queue.length
+  pend.textContent = (queue.length
     ? queue.length + " registro(s) esperando para enviarse."
-    : "No hay registros pendientes.";
+    : "No hay registros pendientes.") + " " + entries.length + " guardado(s) en el celular.";
 
   const reint = document.createElement("button");
   reint.className = "linkbtn"; reint.textContent = "Reintentar envío ahora";
   reint.onclick = ()=>{ sync(false); };
 
-  body.append(l1,i1,l2,i2,b,pend,reint);
+  // --- respaldo: sacar los datos sin depender del Sheet ---
+  const hr = document.createElement("div"); hr.className = "sep";
+  const lt = document.createElement("label"); lt.textContent = "Respaldo";
+  const nota = document.createElement("p"); nota.className = "note";
+  nota.textContent = "Exporta todo lo registrado en este celular, con las mismas columnas del Sheet. Sirve aunque la conexión no funcione: lo pegás directo en la planilla.";
+
+  const bCop = document.createElement("button");
+  bCop.className = "linkbtn"; bCop.textContent = "Copiar todo como CSV";
+  bCop.onclick = ()=>{
+    if (!entries.length) return toast("No hay nada registrado todavía");
+    copiar(csv(), entries.length + " registros copiados");
+  };
+
+  const bDesc = document.createElement("button");
+  bDesc.className = "linkbtn"; bDesc.textContent = "Descargar / compartir archivo CSV";
+  bDesc.onclick = ()=>{ if (!entries.length) return toast("No hay nada registrado todavía"); bajarCSV(); };
+
+  body.append(l1,i1,l2,i2,b,diag,copiarDiag,pend,reint,hr,lt,nota,bCop,bDesc);
+}
+
+/* ===================== exportación ===================== */
+
+function csvCampo(v){
+  v = v == null ? "" : String(v);
+  return /[",\n;]/.test(v) ? '"' + v.replace(/"/g,'""') + '"' : v;
+}
+
+function csv(){
+  const cab = ["id","registrado","inicio","fin","categoría","valor","comentarios"];
+  const filas = entries.slice().reverse().map(e=>[
+    e.id, e.registrado || "", e.inicio || "", e.fin || "",
+    e.categoria || "", (e.valor === "" || e.valor == null) ? "" : e.valor,
+    e.comentarios || ""
+  ].map(csvCampo).join(","));
+  return [cab.join(",")].concat(filas).join("\n");
+}
+
+async function copiar(txt, okMsg){
+  try{
+    await navigator.clipboard.writeText(txt);
+    toast(okMsg);
+  }catch(e){
+    // iOS a veces bloquea el portapapeles: lo dejamos seleccionable a mano
+    const ta = document.createElement("textarea");
+    ta.value = txt; ta.className = "exportbox"; ta.readOnly = true;
+    $("sheetBody").append(ta);
+    ta.scrollIntoView({block:"center"}); ta.select();
+    toast("Copialo a mano desde el cuadro");
+  }
+}
+
+function bajarCSV(){
+  const nombre = "registro-" + nowLocal().slice(0,10) + ".csv";
+  const blob = new Blob(["﻿" + csv()], {type:"text/csv;charset=utf-8"});
+  const file = typeof File !== "undefined" ? new File([blob], nombre, {type:"text/csv"}) : null;
+  if (file && navigator.canShare && navigator.canShare({files:[file]})){
+    navigator.share({files:[file], title:"Registro de síntomas"}).catch(()=>{});
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = nombre;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
 }
 
 /* ===================== arranque ===================== */
